@@ -53,9 +53,7 @@ namespace ratgdo {
             this->input_obst_pin_->pin_mode(gpio::FLAG_INPUT);
             this->input_obst_pin_->attach_interrupt(RATGDOStore::isr_obstruction, &this->isr_store_, gpio::INTERRUPT_FALLING_EDGE);
         }
-        this->sw_serial_.begin(9600, SWSERIAL_8N1, this->input_gdo_pin_->get_pin(), this->output_gdo_pin_->get_pin(), true);
-        this->sw_serial_.enableIntTx(false);
-        this->sw_serial_.enableAutoBaud(true);
+        this->sw_serial_.begin(9600, SERIAL_8N1, this->input_gdo_pin_->get_pin(), this->output_gdo_pin_->get_pin(), true);
 
         ESP_LOGV(TAG, "Syncing rolling code counter after reboot...");
 

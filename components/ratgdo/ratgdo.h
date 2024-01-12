@@ -12,7 +12,7 @@
  ************************************/
 
 #pragma once
-#include "SoftwareSerial.h" // Using espsoftwareserial https://github.com/plerup/espsoftwareserial
+#include "Arduino.h"
 #include "callbacks.h"
 #include "enum.h"
 #include "esphome/core/component.h"
@@ -199,7 +199,8 @@ namespace ratgdo {
         WirePacket tx_packet_;
 
         RATGDOStore isr_store_ {};
-        SoftwareSerial sw_serial_;
+        HardwareSerial &sw_serial_ = Serial1;
+
 
         bool obstruction_from_status_ { false };
 
