@@ -503,11 +503,12 @@ namespace ratgdo {
         // indicate the start of a frame by pulling the 12V line low for at leat 1 byte followed by
         // one STOP bit, which indicates to the receiving end that the start of the message follows
         // The output pin is controlling a transistor, so the logic is inverted
-        this->output_gdo_pin_->digital_write(true); // pull the line low for at least 1 byte
-        delayMicroseconds(1300);
-        this->output_gdo_pin_->digital_write(false); // line high for at least 1 bit
-        delayMicroseconds(130);
-
+       // this->output_gdo_pin_->digital_write(true); // pull the line low for at least 1 byte
+       // delayMicroseconds(1300);
+       // this->output_gdo_pin_->digital_write(false); // line high for at least 1 bit
+       // delayMicroseconds(130);
+        uint8_t start = 0xFF;
+        this->sw_serial_.write(&start, 1);
         this->sw_serial_.write(this->tx_packet_, PACKET_LENGTH);
         this->transmit_pending_ = false;
         this->transmit_pending_start_ = 0;
