@@ -199,9 +199,8 @@ namespace ratgdo {
         WirePacket tx_packet_;
 
         RATGDOStore isr_store_ {};
-        HardwareSerial &sw_serial_ = Serial1;
-
-
+        HardwareSerial &gdo_serial_ = Serial1;
+        bool        receive_pending_ { false };
         bool obstruction_from_status_ { false };
 
         InternalGPIOPin* output_gdo_pin_;
@@ -209,6 +208,7 @@ namespace ratgdo {
         InternalGPIOPin* input_obst_pin_;
         uint64_t client_id_ { 0x539 };
 
+        static void IRAM_ATTR HOT isr_gdo(RATGDOComponent *arg);
     }; // RATGDOComponent
 
 } // namespace ratgdo

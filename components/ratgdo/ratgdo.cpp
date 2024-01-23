@@ -13,6 +13,9 @@
 
 #include "ratgdo.h"
 #include "ratgdo_state.h"
+#include "soc/uart_periph.h"
+#include "esp_rom_gpio.h"
+#include "hal/gpio_hal.h"
 
 #include "esphome/core/log.h"
 
@@ -53,7 +56,9 @@ namespace ratgdo {
             this->input_obst_pin_->pin_mode(gpio::FLAG_INPUT);
             this->input_obst_pin_->attach_interrupt(RATGDOStore::isr_obstruction, &this->isr_store_, gpio::INTERRUPT_FALLING_EDGE);
         }
-        this->sw_serial_.begin(9600, SERIAL_8N1, this->input_gdo_pin_->get_pin(), this->output_gdo_pin_->get_pin(), true);
+
+        this->gdo_serial_.begin(9600, SERIAL_8N1, this->input_gdo_pin_->get_pin(), this->output_gdo_pin_->get_pin(), true);
+        this->input_gdo_pin_->attach_interrupt(this->isr_gdo, this, gpio::INTERRUPT_ANY_EDGE);
 
         ESP_LOGV(TAG, "Syncing rolling code counter after reboot...");
 
@@ -64,14 +69,31 @@ namespace ratgdo {
     void RATGDOComponent::loop()
     {
         if (this->transmit_pending_) {
-            if (!this->transmit_packet()) {
-                return;
-            }
+            this->transmit_packet();
         }
         if (!this->obstruction_from_status_) {
             this->obstruction_loop();
         }
-        this->gdo_state_loop();
+        if (this->receive_pending_) {
+            this->gdo_state_loop();
+        }
+    }
+
+    void RATGDOComponent::isr_gdo(RATGDOComponent* rgdo)
+    {
+        static uint32_t lastMicros = 0;
+        uint32_t now = micros();
+
+        if (rgdo != nullptr) {
+            if (rgdo->input_gdo_pin_->digital_read()) {
+                lastMicros = now;
+            } else if (lastMicros != 0) {
+                if ((now - lastMicros) > 1250) {
+                    rgdo->input_gdo_pin_->detach_interrupt();
+                    rgdo->receive_pending_ = true;
+                }
+            }
+        }
     }
 
     void RATGDOComponent::dump_config()
@@ -390,12 +412,12 @@ namespace ratgdo {
         static uint32_t last_read = 0;
 
         if (!reading_msg) {
-            while (this->sw_serial_.available()) {
-                uint8_t ser_byte = this->sw_serial_.read();
+            while (this->gdo_serial_.available()) {
+                uint8_t ser_byte = this->gdo_serial_.read();
                 last_read = millis();
 
                 if (ser_byte != 0x55 && ser_byte != 0x01 && ser_byte != 0x00) {
-                    ESP_LOG2(TAG, "Ignoring byte (%d): %02X, baud: %d", byte_count, ser_byte, this->sw_serial_.baudRate());
+                    ESP_LOG2(TAG, "Ignoring byte (%d): %02X, baud: %d", byte_count, ser_byte, this->gdo_serial_.baudRate());
                     byte_count = 0;
                     continue;
                 }
@@ -404,30 +426,29 @@ namespace ratgdo {
 
                 // if we are at the start of a message, capture the next 16 bytes
                 if (msg_start == 0x550100) {
-                    ESP_LOG1(TAG, "Baud: %d", this->sw_serial_.baudRate());
+                    ESP_LOG1(TAG, "Baud: %d", this->gdo_serial_.baudRate());
                     rx_packet[0] = 0x55;
                     rx_packet[1] = 0x01;
                     rx_packet[2] = 0x00;
 
+                    byte_count = 3; // make sure this is only 3 or data may be missed
                     reading_msg = true;
                     break;
                 }
             }
         }
         if (reading_msg) {
-            while (this->sw_serial_.available()) {
-                uint8_t ser_byte = this->sw_serial_.read();
+            while (this->gdo_serial_.available()) {
+                uint8_t ser_byte = this->gdo_serial_.read();
                 last_read = millis();
                 rx_packet[byte_count] = ser_byte;
                 byte_count++;
-                // ESP_LOG2(TAG, "Received byte (%d): %02X, baud: %d", byte_count, ser_byte, this->sw_serial_.baudRate());
+                // ESP_LOG2(TAG, "Received byte (%d): %02X, baud: %d", byte_count, ser_byte, this->gdo_serial_.baudRate());
 
                 if (byte_count == PACKET_LENGTH) {
-                    reading_msg = false;
-                    byte_count = 0;
                     this->print_packet(rx_packet);
                     this->decode_packet(rx_packet);
-                    return;
+                    goto done;
                 }
             }
 
@@ -436,10 +457,17 @@ namespace ratgdo {
                 // the rest is not coming (a full packet should be received in ~20ms),
                 // discard it so we can read the following packet correctly
                 ESP_LOGW(TAG, "Discard incomplete packet, length: %d", byte_count);
-                reading_msg = false;
-                byte_count = 0;
+                goto done;
             }
         }
+        return;
+
+    done:
+        reading_msg = false;
+        byte_count = 0;
+        this->receive_pending_ = false;
+        this->gdo_serial_.flush(false); //clear buffer
+        this->input_gdo_pin_->attach_interrupt(this->isr_gdo, this, gpio::INTERRUPT_ANY_EDGE);
     }
 
     void RATGDOComponent::query_status()
@@ -477,25 +505,24 @@ namespace ratgdo {
 
     bool RATGDOComponent::transmit_packet()
     {
-        auto now = micros();
-
-        while (micros() - now < 1300) {
-            if (this->input_gdo_pin_->digital_read()) {
-                if (!this->transmit_pending_) {
-                    this->transmit_pending_ = true;
-                    this->transmit_pending_start_ = millis();
+        if (this->receive_pending_ || this->input_gdo_pin_->digital_read()) {
+            if (!this->transmit_pending_) {
+                this->transmit_pending_ = true;
+                this->transmit_pending_start_ = millis();
+                ESP_LOGD(TAG, "Collision detected, waiting to send packet");
+            } else {
+                if (millis() - this->transmit_pending_start_ < 5000) {
                     ESP_LOGD(TAG, "Collision detected, waiting to send packet");
                 } else {
-                    if (millis() - this->transmit_pending_start_ < 5000) {
-                        ESP_LOGD(TAG, "Collision detected, waiting to send packet");
-                    } else {
-                        this->transmit_pending_start_ = 0; // to indicate GDO not connected state
-                    }
+                    this->transmit_pending_start_ = 0; // to indicate GDO not connected state
                 }
-                return false;
             }
-            delayMicroseconds(100);
+            // if receive pending then we should not enable the interrupt, it will be done when receive is complete
+            return false;
         }
+
+        // Disable interrupt before we send data.
+        this->input_gdo_pin_->detach_interrupt();
 
         ESP_LOG2(TAG, "Sending packet");
         this->print_packet(this->tx_packet_);
@@ -503,16 +530,23 @@ namespace ratgdo {
         // indicate the start of a frame by pulling the 12V line low for at leat 1 byte followed by
         // one STOP bit, which indicates to the receiving end that the start of the message follows
         // The output pin is controlling a transistor, so the logic is inverted
-       // this->output_gdo_pin_->digital_write(true); // pull the line low for at least 1 byte
-       // delayMicroseconds(1300);
-       // this->output_gdo_pin_->digital_write(false); // line high for at least 1 bit
-       // delayMicroseconds(130);
-        uint8_t start = 0xFF;
-        this->sw_serial_.write(&start, 1);
-        this->sw_serial_.write(this->tx_packet_, PACKET_LENGTH);
+
+        // Xmit low for 13 bit times (1 start bit + 8 data) followed by 1 bit time high (stop bit)
+        this->gdo_serial_.updateBaudRate(6900); // 6900 Baud = 145us bit time * 9 = 1305us
+        uint8_t start = 0x0;
+        this->gdo_serial_.write(&start, 1);
+
+        // wait until sent then revert to 9600 baud
+        this->gdo_serial_.flush();
+        this->gdo_serial_.updateBaudRate(9600);
+
+        this->gdo_serial_.write(this->tx_packet_, PACKET_LENGTH);
+        this->gdo_serial_.flush(false); // flush the rx buffer since it will now have the data we just sent.
         this->transmit_pending_ = false;
         this->transmit_pending_start_ = 0;
+        this->input_gdo_pin_->attach_interrupt(this->isr_gdo, this, gpio::INTERRUPT_ANY_EDGE);
         this->command_sent();
+
         return true;
     }
 
