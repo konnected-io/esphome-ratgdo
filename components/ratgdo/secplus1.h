@@ -1,8 +1,8 @@
 #pragma once
 
+#include "Arduino.h"
 #include <queue>
 
-#include "SoftwareSerial.h" // Using espsoftwareserial https://github.com/plerup/espsoftwareserial
 #include "esphome/core/optional.h"
 
 #include "callbacks.h"
@@ -142,7 +142,7 @@ namespace ratgdo {
 
             Traits traits_;
 
-            SoftwareSerial sw_serial_;
+            HardwareSerial gdo_serial_ = Serial1;
 
             InternalGPIOPin* tx_pin_;
             InternalGPIOPin* rx_pin_;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SoftwareSerial.h" // Using espsoftwareserial https://github.com/plerup/espsoftwareserial
+#include "Arduino.h"
 #include "esphome/core/optional.h"
 
 #include "callbacks.h"
@@ -129,19 +129,22 @@ namespace ratgdo {
 
             void sync_helper(uint32_t start, uint32_t delay, uint8_t tries);
 
+            static void IRAM_ATTR gdo_isr(Secplus2 *arg);
+
             LearnState learn_state_ { LearnState::UNKNOWN };
 
             observable<uint32_t> rolling_code_counter_ { 0 };
             uint64_t client_id_ { 0x539 };
 
             bool transmit_pending_ { false };
+            bool receive_pending_ { false };
             uint32_t transmit_pending_start_ { 0 };
             WirePacket tx_packet_;
             OnceCallbacks<void()> on_command_sent_;
 
             Traits traits_;
 
-            SoftwareSerial sw_serial_;
+            HardwareSerial gdo_serial_ = Serial1;
 
             InternalGPIOPin* tx_pin_;
             InternalGPIOPin* rx_pin_;

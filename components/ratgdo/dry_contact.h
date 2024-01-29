@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SoftwareSerial.h" // Using espsoftwareserial https://github.com/plerup/espsoftwareserial
 #include "esphome/core/optional.h"
 
 #include "callbacks.h"

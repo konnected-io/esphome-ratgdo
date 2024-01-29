@@ -19,8 +19,7 @@ namespace ratgdo {
             this->tx_pin_ = tx_pin;
             this->rx_pin_ = rx_pin;
 
-            this->sw_serial_.begin(1200, SWSERIAL_8E1, rx_pin->get_pin(), tx_pin->get_pin(), true);
-
+            this->gdo_serial_.begin(1200, SERIAL_8E1, rx_pin->get_pin(), tx_pin->get_pin(), true);
             this->traits_.set_features(HAS_DOOR_STATUS | HAS_LIGHT_TOGGLE | HAS_LOCK_TOGGLE);
         }
 
@@ -215,13 +214,15 @@ namespace ratgdo {
             static uint16_t byte_count = 0;
             static RxPacket rx_packet;
 
+            optional<RxCommand> cmd = {};
+
             if (!reading_msg) {
-                while (this->sw_serial_.available()) {
-                    uint8_t ser_byte = this->sw_serial_.read();
+                while (this->gdo_serial_.available()) {
+                    uint8_t ser_byte = this->gdo_serial_.read();
                     this->last_rx_ = millis();
 
                     if (ser_byte < 0x30 || ser_byte > 0x3A) {
-                        ESP_LOG2(TAG, "[%d] Ignoring byte [%02X], baud: %d", millis(), ser_byte, this->sw_serial_.baudRate());
+                        ESP_LOG2(TAG, "[%d] Ignoring byte [%02X], baud: %d", millis(), ser_byte, this->gdo_serial_.baudRate());
                         byte_count = 0;
                         continue;
                     }
@@ -231,27 +232,25 @@ namespace ratgdo {
 
                     if (ser_byte == 0x37 || (ser_byte >= 0x30 && ser_byte <= 0x35)) {
                         rx_packet[byte_count++] = 0;
-                        reading_msg = false;
-                        byte_count = 0;
                         ESP_LOG2(TAG, "[%d] Received command: [%02X]", millis(), rx_packet[0]);
-                        return this->decode_packet(rx_packet);
+                        cmd = this->decode_packet(rx_packet);
+                        goto done;
                     }
 
                     break;
                 }
             }
             if (reading_msg) {
-                while (this->sw_serial_.available()) {
-                    uint8_t ser_byte = this->sw_serial_.read();
+                while (this->gdo_serial_.available()) {
+                    uint8_t ser_byte = this->gdo_serial_.read();
                     this->last_rx_ = millis();
                     rx_packet[byte_count++] = ser_byte;
                     ESP_LOG2(TAG, "[%d] Received byte: [%02X]", millis(), ser_byte);
 
                     if (byte_count == RX_LENGTH) {
-                        reading_msg = false;
-                        byte_count = 0;
                         this->print_rx_packet(rx_packet);
-                        return this->decode_packet(rx_packet);
+                        cmd = this->decode_packet(rx_packet);
+                        goto done;
                     }
                 }
 
@@ -260,12 +259,15 @@ namespace ratgdo {
                     // the rest is not coming (a full packet should be received in ~20ms),
                     // discard it so we can read the following packet correctly
                     ESP_LOGW(TAG, "[%d] Discard incomplete packet: [%02X ...]", millis(), rx_packet[0]);
-                    reading_msg = false;
-                    byte_count = 0;
+                    goto done;
                 }
             }
 
             return {};
+        done:
+            reading_msg = false;
+            byte_count = 0;
+            return cmd;
         }
 
         void Secplus1::print_rx_packet(const RxPacket& packet) const
@@ -435,15 +437,8 @@ namespace ratgdo {
 
         void Secplus1::transmit_byte(uint32_t value)
         {
-            bool enable_rx = (value == 0x38) || (value == 0x39) || (value == 0x3A);
-            if (!enable_rx) {
-                this->sw_serial_.enableIntTx(false);
-            }
-            this->sw_serial_.write(value);
+            this->gdo_serial_.write(value);
             this->last_tx_ = millis();
-            if (!enable_rx) {
-                this->sw_serial_.enableIntTx(true);
-            }
             ESP_LOG2(TAG, "[%d] Sent byte: [%02X]", millis(), value);
         }
 
